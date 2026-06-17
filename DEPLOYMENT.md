@@ -7,6 +7,11 @@ This deployment guide outlines the steps required to configure and validate **Ag
 export PROJ_ID=your-project-id
 ```
 
+### ⚠️ Prerequisites
+- A deployed **Agent Gateway** configured in `AGENT_TO_ANYWHERE` (egress) mode.
+- Grant **Compute Admin** (`roles/compute.admin`) to the Vertex AI Service Agent (`service-<PROJECT_NUMBER>@gcp-sa-aiplatform.iam.gserviceaccount.com`).
+- Grant **DNS Peer** (`roles/dns.peer`) to the Vertex AI Service Agent and Service Extensions Service Agent (`service-<PROJECT_NUMBER>@gcp-sa-dep.iam.gserviceaccount.com`).
+
 ---
 
 ## 🛠️ Step 1: Create the VPC Network (`agent-vpc`)
@@ -104,6 +109,102 @@ gcloud dns policies create agent-dns-policy \
 
 ---
 
+## 🛠️ Step 7: Create PSC Network Attachment
+
+Create a Private Service Connect (PSC) Network Attachment named `agent-attachment` in region `us-east1` allowing automatic acceptance from any project:
+
+```bash
+gcloud compute network-attachments create agent-attachment \
+  --region=us-east1 \
+  --subnets=network-attachment \
+  --connection-preference=ACCEPT_AUTOMATIC \
+  --project=${PROJ_ID}
+```
+
+---
+
+## 🛠️ Step 8: Create Egress Firewall Rule (`agent-gateway-egress-log`)
+
+Create an egress firewall rule with logging enabled to monitor traffic egressing from Agent Gateway to the VPC:
+
+```bash
+gcloud compute firewall-rules create agent-gateway-egress-log \
+  --network=agent-vpc \
+  --direction=EGRESS \
+  --priority=100 \
+  --action=ALLOW \
+  --rules=all \
+  --destination-ranges=0.0.0.0/0 \
+  --enable-logging \
+  --project=${PROJ_ID}
+```
+
+---
+
+## 🛠️ Step 9: Configure and Patch Agent Gateway (`networkConfig`)
+
+Attach your Private Service Connect Network Attachment and Cloud DNS Peering configuration directly to your regional Agent Gateway:
+
+1. Create a configuration file named `patch-gateway.yaml`:
+```yaml
+name: agw-codelab2-us-east1-ata
+protocols:
+  - MCP
+googleManaged:
+  governedAccessPath: AGENT_TO_ANYWHERE
+registries:
+  - "//agentregistry.googleapis.com/projects/YOUR_PROJECT_ID/locations/us-east1"
+networkConfig:
+  egress:
+    networkAttachment: projects/YOUR_PROJECT_ID/regions/us-east1/networkAttachments/agent-attachment
+  dnsPeeringConfig:
+    domains:
+      - run.app.
+    targetProject: YOUR_PROJECT_ID
+    targetNetwork: projects/YOUR_PROJECT_ID/global/networks/agent-vpc
+```
+
+2. Import the patched configuration:
+```bash
+gcloud alpha network-services agent-gateways import agw-codelab2-us-east1-ata \
+  --source=patch-gateway.yaml \
+  --location=us-east1 \
+  --project=${PROJ_ID}
+```
+
+---
+
+## 🛠️ Step 10: Configure Agent Runtime (`.agent_engine_config.json`)
+
+Update your [`.agent_engine_config.json`](.agent_engine_config.json) to enable **Agent Identity** and route outbound traffic through your managed **Agent Gateway**:
+
+```json
+{
+  "identity_type": "AGENT_IDENTITY",
+  "agent_gateway_config": {
+    "agent_to_anywhere_config": {
+      "agent_gateway": "projects/YOUR_PROJECT_ID/locations/us-east1/agentGateways/YOUR_GATEWAY_NAME"
+    }
+  },
+  "env_vars": {
+    "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true"
+  }
+}
+```
+
+*Note: Replace `YOUR_PROJECT_ID` and `YOUR_GATEWAY_NAME` with your actual project ID and Gateway name.*
+
+### Grant Required Roles to Agent Identity PrincipalSet
+When `"identity_type": "AGENT_IDENTITY"` is enabled, grant the following roles to the managed `PrincipalSet` (`principalSet://agents.global.org-ORGANIZATION_ID.system.id.goog/attribute.platformContainer/aiplatform/projects/PROJECT_NUMBER`):
+- `roles/aiplatform.user`
+- `roles/aiplatform.agentDefaultAccess`
+- `roles/agentregistry.viewer`
+- `roles/logging.logWriter`
+- `roles/monitoring.metricWriter`
+- `roles/browser`
+
+---
+
 ## 🚀 Next Steps (Agent Gateway Setup)
 - [x] **Create VPC Network (`agent-vpc`)**
 - [x] **Create Subnet (`network-attachment`)**
@@ -111,6 +212,37 @@ gcloud dns policies create agent-dns-policy \
 - [x] **Create Private DNS Zone (`cloud-run`)**
 - [x] **Create DNS A Record (`*.run.app.`)**
 - [x] **Enable DNS Query Logging**
-- [ ] **Create Proxy-Only Subnet**: Provision a proxy-only subnet for the Agent Gateway.
-- [ ] **Deploy the Agent Gateway**: Create the gateway resource in `AGENT_TO_ANYWHERE` (egress) mode attached to `agent-vpc`.
-- [ ] **Deploy the Client Agent**: Configure `.agent_engine_config.json` with your gateway resource name and deploy via `adk deploy`.
+- [x] **Create PSC Network Attachment**
+- [x] **Create Egress Firewall Rule (`agent-gateway-egress-log`)**
+- [x] **Configure & Patch Agent Gateway (`networkConfig`)**
+- [x] **Configure Agent Runtime**: Update `.agent_engine_config.json` with user-supplied entries.
+- [x] **Deploy the Client Agent**: Run `adk deploy agent_engine` to push the agent.
+
+---
+
+## 🔍 Verification (DNS Peering & Egress Traffic)
+
+You can verify that DNS peering and network egress are functioning properly via Cloud Logging:
+
+1. **Verify DNS Peering**:
+   Check Cloud DNS query logs to confirm resolution of `*.run.app.` originating across peering from the Vertex AI tenant network:
+   ```log
+   resource.type="dns_query"
+   jsonPayload.queryName="mcp-weather-server-431967288103.us-east1.run.app."
+   ```
+
+2. **Verify Network Attachment & Egress Firewall**:
+   Check Cloud Firewall egress logs to confirm outgoing connections from Agent Runtime hitting the internal Private Service Connect IP (`172.16.10.10`):
+   ```log
+   resource.type="gce_subnetwork"
+   jsonPayload.rule_details.reference="projects/deepakmichael-codelab2/global/firewalls/agent-gateway-egress-log"
+   ```
+
+3. **Verify Agent Gateway Routing (`agentGatewayConfig`)**:
+   Query the deployed runtime API to verify that egress traffic is configured to route through your Agent Gateway:
+   ```bash
+   curl -s -X GET \
+     -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+     "https://us-east1-aiplatform.googleapis.com/v1beta1/projects/deepakmichael-codelab2/locations/us-east1/reasoningEngines/2534858087139901440" \
+     | jq '.spec.deploymentSpec.agentGatewayConfig'
+   ```

@@ -1,7 +1,8 @@
 {
+  "identity_type": "AGENT_IDENTITY",
   "agent_gateway_config": {
     "agent_to_anywhere_config": {
-      "agent_gateway": "projects/579295505315/locations/us-central1/agentGateways/uscentral1-agw"
+      "agent_gateway": "projects/deepakmichael-codelab2/locations/us-east1/agentGateways/agw-codelab2-us-east1-ata"
     }
   },
   "env_vars": {
