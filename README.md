@@ -29,7 +29,15 @@ flowchart LR
 
 ## 🛠️ Deployment Workflow
 
-### 1. Deploy the Cloud Run Server
+### 1. Clone the Repository
+```bash
+git clone https://github.com/demichael4520/AR_HTTPMCP_CR_AGW.git
+cd AR_HTTPMCP_CR_AGW
+```
+
+---
+
+### 2. Deploy the Cloud Run Server
 Navigate to `cloud_run/` and deploy the service:
 ```bash
 cd cloud_run
@@ -42,7 +50,7 @@ Once deployed, note the dynamic service URL (e.g., `https://mcp-weather-server-X
 
 ---
 
-### 2. Update the Client Agent Configuration (`agent.py`)
+### 3. Update the Client Agent Configuration (`agent.py`)
 In `agent.py`, update the `url` parameter inside `StreamableHTTPConnectionParams` by appending `/mcp` to your Cloud Run URL:
 
 ```python
@@ -55,7 +63,7 @@ mcp_toolset = McpToolset(
 
 ---
 
-### 3. Configure Agent Gateway Routing
+### 4. Configure Agent Gateway Routing
 Ensure your [`.agent_engine_config.json`](.agent_engine_config.json) points to your managed Agent Gateway resource:
 
 ```json
@@ -71,7 +79,7 @@ Ensure your [`.agent_engine_config.json`](.agent_engine_config.json) points to y
 
 ---
 
-### 4. Deploy to Agent Runtime
+### 5. Deploy to Agent Runtime
 Deploy the Client Agent using the ADK CLI:
 
 ```bash
