@@ -15,5 +15,5 @@ root_agent = LlmAgent(
     model='gemini-2.5-flash',
     name='mcp_weather_client',
     instruction='You are a helpful assistant that can check weather using tools.',
-    tools=[mcp_toolset],
+    tools=[],
 )
