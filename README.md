@@ -1,71 +1,85 @@
-# MCP Client Agent
+# MCP Client & Streamable HTTP Weather Server
 
-This agent acts as a client for an MCP (Model Context Protocol) server and is deployed
- to Google Cloud Agent Engine.
+This repository provides an integrated **Model Context Protocol (MCP)** solution featuring a **Streamable HTTP** FastMCP Weather Server deployed to **Cloud Run** and an MCP Client Agent running on **Agent Runtime**.
 
-## Prerequisites
-
-- Python 3.13 or later
-- Google Cloud SDK (`gcloud`)
-
-## Setup
-
-1.  **Create a virtual environment**:
-    ```bash
-    python3 -m venv venv
-    ```
-
-2.  **Activate the virtual environment**:
-    ```bash
-    source venv/bin/activate
-    ```
-
-3.  **Install dependencies**:
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-4.  **Authenticate with Google Cloud**:
-    ```bash
-    gcloud auth login
-    gcloud auth application-default login
-    ```
-
-## Configuration
-
-The agent is configured in `agent.py`. It connects to the MCP server at:
-`https://mcp-weather-server-1005790925927.us-central1.run.app/sse`
-
-If you need to change the URL or model, edit `agent.py`.
-
-## Deployment
-
-To deploy the agent to Agent Engine without exceeding the payload size limit (which ha
-ppens if the local `venv` directory is uploaded), do not deploy directly from the root
- directory with `.`. Instead, create a temporary clean directory, copy only the requir
-ed files, and deploy from there.
-
-Run the following commands:
-
-```bash
-PROJECT_ID=your-project-id
-LOCATION_ID=us-central1
-
-# 1. Create a temporary clean directory for deployment
-mkdir -p /tmp/weather_deploy
-
-# 2. Copy only required agent files
-cp agent.py requirements.txt __init__.py /tmp/weather_deploy/
-
-# 3. Deploy the agent from the temporary directory using adk in the venv
-./venv/bin/adk deploy agent_engine \
-  --project=$PROJECT_ID \
-  --region=$LOCATION_ID \
-  --display_name="MCP Weather Client" \
-  /tmp/weather_deploy
-
-# 4. Clean up the temporary directory
-rm -rf /tmp/weather_deploy
+```mermaid
+flowchart LR
+    User([User / Client]) -->|Query| AR[Agent Runtime]
+    subgraph GCP VPC [Customer VPC Network]
+        AGW[Agent Gateway]
+        CR[Cloud Run MCP Server\nStreamable HTTP]
+    end
+    AR -->|Egress / ATA| AGW
+    AGW -->|PSC Attachment| CR
 ```
 
-*Note: Replace `your-project-id` with your actual Google Cloud Project ID.*
+---
+
+## 🚀 Architecture Overview
+
+1. **Cloud Run MCP Server (`cloud_run/`)**:
+   - Built using `FastMCP` and `mcp.streamable_http_app()`.
+   - Exposes a unified `/mcp` HTTP endpoint supporting both HTTP/1.1 and HTTP/2 streaming.
+
+2. **Agent Runtime (`agent.py`)**:
+   - Built using the `LlmAgent` and `McpToolset` (`StreamableHTTPConnectionParams`).
+   - Routes outbound tool execution requests securely through an **Agent Gateway**.
+
+---
+
+## 🛠️ Deployment Workflow
+
+### 1. Deploy the Cloud Run Server
+Navigate to `cloud_run/` and deploy the service:
+```bash
+cd cloud_run
+gcloud run deploy mcp-weather-server \
+  --source . \
+  --region=us-east1 \
+  --allow-unauthenticated
+```
+Once deployed, note the dynamic service URL (e.g., `https://mcp-weather-server-XXXXX.us-east1.run.app`).
+
+---
+
+### 2. Update the Client Agent Configuration (`agent.py`)
+In `agent.py`, update the `url` parameter inside `StreamableHTTPConnectionParams` by appending `/mcp` to your Cloud Run URL:
+
+```python
+mcp_toolset = McpToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url="https://mcp-weather-server-XXXXX.us-east1.run.app/mcp",
+    )
+)
+```
+
+---
+
+### 3. Configure Agent Gateway Routing
+Ensure your [`.agent_engine_config.json`](.agent_engine_config.json) points to your managed Agent Gateway resource:
+
+```json
+{
+  "identity_type": "AGENT_IDENTITY",
+  "agent_gateway_config": {
+    "agent_to_anywhere_config": {
+      "agent_gateway": "projects/YOUR_PROJECT_ID/locations/us-east1/agentGateways/YOUR_GATEWAY_NAME"
+    }
+  }
+}
+```
+
+---
+
+### 4. Deploy to Agent Runtime
+Deploy the Client Agent using the ADK CLI:
+
+```bash
+adk deploy agent_engine \
+  --project=your-project-id \
+  --region=us-east1 \
+  --display_name="MCP Weather Client" \
+  .
+```
+
+For complete VPC networking, Private Service Connect attachments, and DNS peering verification steps, reference [DEPLOYMENT.md](DEPLOYMENT.md).
